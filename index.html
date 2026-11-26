@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quản lý công việc</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f3f5fc; color: #18213b; font: 16px/1.5 system-ui, sans-serif; }
+    main { max-width: 960px; margin: 52px auto; padding: 0 24px; }
+    h1 { font-size: clamp(28px, 5vw, 42px); margin: 0 0 22px; letter-spacing: -.035em; }
+    h2 { margin: 0 0 16px; font-size: 22px; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0 0 22px; }
+    .stat, section { background: white; border: 1px solid #dde3f2; border-radius: 14px; padding: 18px; }
+    .stat strong { display: block; font-size: 30px; color: #4438b7; }
+    .stat span { color: #485572; font-size: 14px; }
+    form, li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    input, button, select { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid #cdd5e8; background: white; color: inherit; }
+    input, .task-name { flex: 1; min-width: 170px; }
+    .task-name { overflow-wrap: anywhere; }
+    button { cursor: pointer; font-weight: 600; }
+    button[type=submit] { color: white; background: #493ac3; border-color: #493ac3; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .delete { color: #a12942; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    li { border-top: 1px solid #e2e7f3; padding: 12px 0; }
+    #message { color: #a12942; min-height: 24px; margin: 8px 0; }
+    @media (max-width: 600px) {
+      main { margin: 24px auto; padding: 0 14px; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .task-name { flex-basis: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Quản lý công việc</h1>
+    <div class="stats" aria-label="Thống kê công việc">
+      <div class="stat"><span>Tổng công việc</span><strong id="total">0</strong></div>
+      <div class="stat"><span>Chưa làm</span><strong id="pending">0</strong></div>
+      <div class="stat"><span>Đang làm</span><strong id="doing">0</strong></div>
+      <div class="stat"><span>Hoàn thành</span><strong id="done">0</strong></div>
+    </div>
+    <section>
+      <h2>Danh sách công việc</h2>
+      <form>
+        <input id="title" aria-label="Tên công việc" placeholder="Nhập tên công việc" maxlength="120" required>
+        <button type="submit">Thêm công việc</button>
+        <button type="button" id="cancel" hidden>Hủy sửa</button>
+      </form>
+      <p id="message" role="alert"></p>
+      <p id="empty" hidden>Chưa có công việc nào.</p>
+      <ul></ul>
+    </section>
+  </main>
+  <script>
+    const labels = { pending: 'Chưa làm', doing: 'Đang làm', done: 'Hoàn thành' };
+    const form = document.querySelector('form');
+    const title = document.querySelector('#title');
+    const save = form.querySelector('[type=submit]');
+    const cancel = document.querySelector('#cancel');
+    const message = document.querySelector('#message');
+    const list = document.querySelector('ul');
+    const empty = document.querySelector('#empty');
+    let editingId = null;
+
+    async function api(path, method = 'GET', data) {
+      const response = await fetch('/api/' + path, {
+        method,
+        headers: data ? { 'Content-Type': 'application/json' } : {},
+        body: data ? JSON.stringify(data) : undefined
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      return result;
+    }
+
+    function resetForm() {
+      editingId = null;
+      form.reset();
+      save.textContent = 'Thêm công việc';
+      cancel.hidden = true;
+    }
+
+    async function refresh() {
+      const [tasks, stats] = await Promise.all([api('tasks'), api('stats')]);
+      for (const [key, value] of Object.entries(stats)) {
+        document.getElementById(key).textContent = value;
+      }
+      list.replaceChildren(...tasks.map(renderTask));
+      empty.hidden = tasks.length > 0;
+    }
+
+    async function action(work) {
+      message.textContent = '';
+      const controls = document.querySelectorAll('button, select, input');
+      controls.forEach(control => { control.disabled = true; });
+      try {
+        await work();
+      } catch (error) {
+        message.textContent = error.message;
+      } finally {
+        controls.forEach(control => { control.disabled = false; });
+      }
+    }
+
+    function renderTask(task) {
+      const row = document.createElement('li');
+      const name = document.createElement('span');
+      name.className = 'task-name';
+      name.textContent = task.title;
+      const status = document.createElement('select');
+      status.setAttribute('aria-label', 'Trạng thái của ' + task.title);
+      for (const [value, label] of Object.entries(labels)) status.add(new Option(label, value));
+      status.value = task.status;
+      status.onchange = () => {
+        const next = status.value;
+        status.value = task.status;
+        action(async () => {
+          await api('tasks/' + task.id, 'PATCH', { status: next });
+          await refresh();
+        });
+      };
+      const edit = document.createElement('button');
+      edit.textContent = 'Sửa';
+      edit.onclick = () => {
+        editingId = task.id;
+        title.value = task.title;
+        save.textContent = 'Lưu thay đổi';
+        cancel.hidden = false;
+        title.focus();
+      };
+      const remove = document.createElement('button');
+      remove.className = 'delete';
+      remove.textContent = 'Xóa';
+      remove.onclick = () => {
+        if (!confirm('Xóa công việc “' + task.title + '”?')) return;
+        action(async () => {
+          await api('tasks/' + task.id, 'DELETE');
+          if (editingId === task.id) resetForm();
+          await refresh();
+        });
+      };
+      row.append(name, status, edit, remove);
+      return row;
+    }
+
+    cancel.onclick = resetForm;
+    form.onsubmit = event => {
+      event.preventDefault();
+      action(async () => {
+        const data = { title: title.value };
+        if (editingId === null) await api('tasks', 'POST', data);
+        else await api('tasks/' + editingId, 'PATCH', data);
+        resetForm();
+        await refresh();
+      });
+    };
+    action(refresh);
+  </script>
+</body>
+</html>
